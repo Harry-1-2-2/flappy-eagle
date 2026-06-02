@@ -1,5 +1,7 @@
 # Make Flappy Bird Great Again 🦅
 
+### ▶ [**Play now in your browser**](https://harry-1-2-2.github.io/flappy-eagle/)
+
 A single-file, patriotic Flappy Bird clone. You pilot a bald eagle through
 stars-and-stripes skies, threading the gaps in red/white pipes.
 
