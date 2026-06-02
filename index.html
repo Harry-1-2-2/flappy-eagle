@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Make Flappy Bird Great Again</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #16162e; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas {
+    height: 100vh; max-width: 100vw; aspect-ratio: 400 / 600;
+    background: #000; box-shadow: 0 0 40px rgba(0,0,0,0.6);
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="400" height="600"></canvas>
+<script>
+  // ---- Constants ----
+  const CANVAS_W = 400;
+  const CANVAS_H = 600;
+  const GROUND_HEIGHT = 80;
+  const PLAYFIELD_BOTTOM = CANVAS_H - GROUND_HEIGHT; // 520
+  const GRAVITY = 1400;          // px/s^2
+  const FLAP_VELOCITY = -380;    // px/s
+  const PIPE_SPEED = 150;        // px/s
+  const PIPE_SPAWN_INTERVAL = 1.6; // s
+  const PIPE_GAP_HEIGHT = 160;   // px
+  const PIPE_WIDTH = 60;         // px
+  const EAGLE_X = 100;
+  const EAGLE_SIZE = 34;
+
+  // ---- Pure game logic ----
+  function stepPhysics(eagle, dt) {
+    const velocity = eagle.velocity + GRAVITY * dt;
+    const y = eagle.y + velocity * dt;
+    return { ...eagle, y, velocity };
+  }
+
+  function rectsOverlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x &&
+           a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function eagleRect(eagle) {
+    return { x: EAGLE_X, y: eagle.y, w: EAGLE_SIZE, h: EAGLE_SIZE };
+  }
+
+  function pipeRects(pipe) {
+    const bottomStart = pipe.gapY + PIPE_GAP_HEIGHT;
+    return [
+      { x: pipe.x, y: 0, w: PIPE_WIDTH, h: pipe.gapY },
+      { x: pipe.x, y: bottomStart, w: PIPE_WIDTH, h: PLAYFIELD_BOTTOM - bottomStart },
+    ];
+  }
+
+  function eagleHitsPipe(eagle, pipe) {
+    const e = eagleRect(eagle);
+    return pipeRects(pipe).some((r) => rectsOverlap(e, r));
+  }
+
+  function checkBounds(eagle) {
+    return eagle.y <= 0 || eagle.y + EAGLE_SIZE >= PLAYFIELD_BOTTOM;
+  }
+
+  function updateScore(eagle, pipes, score) {
+    // Mutates pipe.scored in place to count each pipe once; returns the new score.
+    let newScore = score;
+    for (const pipe of pipes) {
+      if (!pipe.scored && pipe.x + PIPE_WIDTH < EAGLE_X) {
+        pipe.scored = true;
+        newScore++;
+      }
+    }
+    return newScore;
+  }
+
+  function spawnPipe(rng) {
+    const minGapY = 40;
+    const maxGapY = PLAYFIELD_BOTTOM - PIPE_GAP_HEIGHT - 40;
+    const gapY = minGapY + rng() * (maxGapY - minGapY);
+    return { x: CANVAS_W, gapY, scored: false };
+  }
+
+  // ---- Node test export guard (inert in the browser) ----
+  if (typeof module !== 'undefined') {
+    module.exports = { stepPhysics, rectsOverlap, eagleRect, pipeRects, eagleHitsPipe, checkBounds, updateScore, spawnPipe };
+  }
+
+  // ---- Browser-only wiring (inert under Node) ----
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const canvas = document.getElementById('game');
+    const ctx = canvas && canvas.getContext('2d');
+    if (!ctx) {
+      document.body.innerHTML =
+        '<p style="color:#fff;font-family:sans-serif;padding:1rem">Sorry, your browser does not support canvas.</p>';
+    } else {
+      const STATE = { READY: 'READY', PLAYING: 'PLAYING', GAME_OVER: 'GAME_OVER' };
+      let state, eagle, pipes, score, spawnTimer, lastTime;
+
+      const stars = Array.from({ length: 12 }, () => ({
+        x: Math.random() * CANVAS_W,
+        y: 20 + Math.random() * (PLAYFIELD_BOTTOM - 40),
+      }));
+
+      function reset() {
+        eagle = { y: CANVAS_H / 2, velocity: 0 };
+        pipes = [];
+        score = 0;
+        spawnTimer = 0;
+        state = STATE.READY;
+      }
+
+      function flap() {
+        if (state === STATE.GAME_OVER) reset();
+        if (state === STATE.READY) state = STATE.PLAYING;
+        eagle.velocity = FLAP_VELOCITY;
+      }
+
+      function updateStars(dt) {
+        for (const s of stars) {
+          s.x -= 20 * dt;
+          if (s.x < -12) { s.x = CANVAS_W + 12; s.y = 20 + Math.random() * (PLAYFIELD_BOTTOM - 40); }
+        }
+      }
+
+      function update(dt) {
+        if (state !== STATE.PLAYING) return;
+        eagle = stepPhysics(eagle, dt);
+        spawnTimer += dt;
+        if (spawnTimer >= PIPE_SPAWN_INTERVAL) {
+          spawnTimer -= PIPE_SPAWN_INTERVAL;
+          pipes.push(spawnPipe(Math.random));
+        }
+        for (const p of pipes) p.x -= PIPE_SPEED * dt;
+        pipes = pipes.filter((p) => p.x + PIPE_WIDTH > -10);
+        score = updateScore(eagle, pipes, score);
+        if (checkBounds(eagle) || pipes.some((p) => eagleHitsPipe(eagle, p))) {
+          state = STATE.GAME_OVER;
+        }
+      }
+
+      function drawBackground() {
+        const g = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+        g.addColorStop(0, '#3c3b6e');
+        g.addColorStop(0.5, '#ffffff');
+        g.addColorStop(1, '#b22234');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.font = '16px serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        ctx.globalAlpha = 0.75;
+        for (const s of stars) ctx.fillText('⭐', s.x, s.y);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#7a5230';
+        ctx.fillRect(0, PLAYFIELD_BOTTOM, CANVAS_W, GROUND_HEIGHT);
+        ctx.fillStyle = '#5e3f25';
+        ctx.fillRect(0, PLAYFIELD_BOTTOM, CANVAS_W, 6);
+      }
+
+      function drawPipes() {
+        for (const p of pipes) {
+          for (const r of pipeRects(p)) {
+            ctx.fillStyle = '#b22234';
+            ctx.fillRect(r.x, r.y, r.w, r.h);
+            ctx.fillStyle = '#ffffff';
+            for (let sy = r.y; sy < r.y + r.h; sy += 24) {
+              ctx.fillRect(r.x, sy, r.w, 12);
+            }
+          }
+          ctx.fillStyle = '#3c3b6e';
+          ctx.fillRect(p.x - 3, p.gapY - 14, PIPE_WIDTH + 6, 14);
+          ctx.fillRect(p.x - 3, p.gapY + PIPE_GAP_HEIGHT, PIPE_WIDTH + 6, 14);
+        }
+      }
+
+      function drawEagle() {
+        const cx = EAGLE_X + EAGLE_SIZE / 2;
+        const cy = eagle.y + EAGLE_SIZE / 2;
+        const angle = Math.max(-0.5, Math.min(1.0, eagle.velocity / 600));
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(angle);
+        ctx.font = EAGLE_SIZE + 'px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🦅', 0, 0);
+        ctx.restore();
+      }
+
+      function drawHUD() {
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#3c3b6e';
+        ctx.lineWidth = 4;
+        ctx.font = 'bold 40px Georgia, serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.strokeText(String(score), CANVAS_W / 2, 18);
+        ctx.fillText(String(score), CANVAS_W / 2, 18);
+      }
+
+      function drawCenterText(lines) {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        let y = CANVAS_H / 2 - 70;
+        for (const line of lines) {
+          ctx.font = line.font;
+          ctx.fillStyle = line.color;
+          ctx.fillText(line.text, CANVAS_W / 2, y);
+          y += line.gap;
+        }
+      }
+
+      function draw() {
+        drawBackground();
+        drawPipes();
+        drawEagle();
+        if (state === STATE.PLAYING || state === STATE.GAME_OVER) drawHUD();
+        if (state === STATE.READY) {
+          drawCenterText([
+            { text: 'MAKE', font: 'bold 36px Georgia, serif', color: '#ffffff', gap: 42 },
+            { text: 'FLAPPY BIRD', font: 'bold 36px Georgia, serif', color: '#ffffff', gap: 42 },
+            { text: 'GREAT AGAIN', font: 'bold 36px Georgia, serif', color: '#e8b923', gap: 58 },
+            { text: 'Click / Tap / Space to flap', font: '18px Georgia, serif', color: '#ffffff', gap: 0 },
+          ]);
+        } else if (state === STATE.GAME_OVER) {
+          drawCenterText([
+            { text: 'GAME OVER', font: 'bold 46px Georgia, serif', color: '#e8b923', gap: 52 },
+            { text: 'Score: ' + score, font: 'bold 26px Georgia, serif', color: '#ffffff', gap: 46 },
+            { text: 'Click to play again', font: '18px Georgia, serif', color: '#ffffff', gap: 0 },
+          ]);
+        }
+      }
+
+      function loop(now) {
+        if (lastTime === undefined) lastTime = now;
+        let dt = (now - lastTime) / 1000;
+        lastTime = now;
+        dt = Math.min(dt, 0.05); // clamp so tab-switches don't fling the eagle
+        updateStars(dt);
+        update(dt);
+        draw();
+        requestAnimationFrame(loop);
+      }
+
+      function onFlap(e) { e.preventDefault(); flap(); }
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') { e.preventDefault(); flap(); }
+      });
+      canvas.addEventListener('mousedown', onFlap);
+      canvas.addEventListener('touchstart', onFlap, { passive: false });
+
+      reset();
+      requestAnimationFrame(loop);
+    }
+  }
+</script>
+</body>
+</html>
